@@ -22,59 +22,57 @@ def iniciar_db():
     conn.commit()
     conn.close()
 
-# NUEVO MOTOR: API DE SOUNDCLOUD/AUDIOMACK (CANCIONES COMPLETAS Y GRATUITAS)
+# MOTOR MEJORADO: INDEXADOR DE AUDIOS COMPLETOS
 def buscar_musica_api(query):
     """
-    Consume un indexador musical público alternativo que no limita a 30 segundos
-    y entrega el flujo de audio .mp3 completo en formato JSON ligero.
+    Busca en un indexador global de archivos multimedia de acceso abierto.
+    Devuelve pistas 100% completas en formato MP3 sin restricciones de tiempo.
     """
     try:
         query_limpia = requests.utils.quote(query)
         
-        # Conectamos al puente público directo de descarga completa
-        url_puente = f"https://sc-download.net/api/search?q={query_limpia}"
-        respuesta = requests.get(url_puente, timeout=10)
+        # Conexión directa a un buscador de archivos de música libres y completos (Archive Open Data)
+        url_api = f"https://archive.org/advancedsearch.php?q={query_limpia}+AND+mediatype:audio&output=json&rows=1"
+        respuesta = requests.get(url_api, timeout=12)
         
         if respuesta.status_code == 200:
             datos = respuesta.json()
-            # Validamos si el indexador devuelve una lista
-            if isinstance(datos, list) and len(datos) > 0:
-                primer_resultado = datos[0]
-                link_mp3 = primer_resultado.get('url') or primer_resultado.get('download_url')
-                titulo = primer_resultado.get('title', 'Canción Completa')
+            docs = datos.get('response', {}).get('docs', [])
+            
+            if docs:
+                item_id = docs[0].get('identifier')
+                titulo = docs[0].get('title', 'Canción Completa')
                 
-                if link_mp3:
-                    return {
-                        "url": link_mp3,
-                        "nombre_archivo": titulo
-                    }
-            # CORREGIDO: Eliminamos la palabra "Red" que causaba el crash
-            elif isinstance(datos, dict) and datos.get('results'):
-                primer_resultado = datos['results'][0]
-                link_mp3 = primer_resultado.get('audio') or primer_resultado.get('url')
-                titulo = primer_resultado.get('title', 'Canción Completa')
-                if link_mp3:
-                    return {
-                        "url": link_mp3,
-                        "nombre_archivo": titulo
-                    }
-                    
+                # Obtenemos los metadatos de los archivos dentro de ese contenedor para sacar el MP3 real
+                url_files = f"https://archive.org/metadata/{item_id}"
+                res_files = requests.get(url_files, timeout=10).json()
+                
+                for f in res_files.get('files', []):
+                    if f.get('name', '').endswith('.mp3'):
+                        # Construimos la URL de descarga directa de la canción completa
+                        link_completo = f"https://archive.org/download/{item_id}/{f['name']}"
+                        return {
+                            "url": link_completo,
+                            "nombre_archivo": titulo
+                        }
+                        
     except Exception as e:
-        print(f"Error al conectar con el servidor de música completa: {e}")
+        print(f"Error en motor principal de audio completo: {e}")
         
-    # RESPALDO SEGURO: Si el puente falla, usamos el indexador público de iTunes mapeado
+    # RESPALDO 2: Indexador de música global alternativo directo
     try:
-        url_fallback = f"https://itunes.apple.com/search?term={query_limpia}&media=music&limit=1"
-        res = requests.get(url_fallback, timeout=8).json()
+        query_limpia = requests.utils.quote(query)
+        url_respaldo = f"https://api.jamendo.com/v3.0/tracks/?client_id=56d30c95&format=json&limit=1&namesearch={query_limpia}"
+        res = requests.get(url_respaldo, timeout=10).json()
         if res.get('results'):
             track = res['results'][0]
-            link_directo = track.get('previewUrl')
-            return {
-                "url": link_directo.replace("preview.rad.io", "stream.rad.io") if link_directo and "preview" in link_directo else link_directo,
-                "nombre_archivo": f"{track.get('artistName')} - {track.get('trackName')}"
-            }
-    except:
-        pass
+            if track.get('audio'):
+                return {
+                    "url": track.get('audio'),
+                    "nombre_archivo": f"{track.get('artist_name')} - {track.get('name')}"
+                }
+    except Exception as e:
+        print(f"Error en motor de respaldo: {e}")
         
     return None
 
@@ -83,9 +81,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     usuario = update.effective_user.first_name
     mensaje_bienvenida = (
         f"👋 ¡Hola {usuario}! Bienvenido a **AudioFlow** 🌊\n\n"
-        "¡Motor actualizado con éxito! Ahora busco y descargo las canciones **completas** al 100%.\n\n"
+        "¡Motor de descarga completa activado! Disfruta tus temas de principio a fin.\n\n"
         "🎵 **¿Cómo buscar?**\n"
-        "Escríbeme el nombre de cualquier canción o artista (Ejemplo: `Michael Jackson` o `Luis Miguel`)."
+        "Escríbeme el nombre de la canción o el artista que deseas escuchar."
     )
     await update.message.reply_text(mensaje_bienvenida, parse_mode="Markdown")
 
@@ -116,16 +114,16 @@ async def procesar_musica(update: Update, context: ContextTypes.DEFAULT_TYPE):
     datos_cancion = buscar_musica_api(busqueda_usuario)
     
     if not datos_cancion:
-        await mensaje_espera.edit_text("❌ No logré encontrar esa canción completa. Intenta especificando el nombre del artista.")
+        await mensaje_espera.edit_text("❌ No logré encontrar esa canción completa. Intenta especificando el nombre de otra manera.")
         conn.close()
         return
 
     archivo_temp = "audioflow_full_track.mp3"
     try:
-        await mensaje_espera.edit_text(f"📥 Descargando canción completa:\n🎵 *{datos_cancion['nombre_archivo']}*...", parse_mode="Markdown")
+        await mensaje_espera.edit_text(f"📥 Descargando pista completa:\n🎵 *{datos_cancion['nombre_archivo']}*...", parse_mode="Markdown")
         
-        # Descarga del flujo completo
-        respuesta_audio = requests.get(datos_cancion['url'], timeout=25)
+        # Descarga del archivo completo de larga duración
+        respuesta_audio = requests.get(datos_cancion['url'], timeout=45)
         with open(archivo_temp, "wb") as f:
             f.write(respuesta_audio.content)
 
