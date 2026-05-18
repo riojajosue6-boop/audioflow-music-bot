@@ -22,47 +22,56 @@ def iniciar_db():
     conn.commit()
     conn.close()
 
-# MOTOR DE AUDIO COMPLETO
+# MOTOR DE AUDIO MEJORADO Y REFORZADO
 def buscar_musica_api(query):
+    query_limpia = requests.utils.quote(query)
+    
+    # INTENTO 1: Servidor global de archivos abiertos (Archive.org)
     try:
-        query_limpia = requests.utils.quote(query)
-        url_api = f"https://archive.org/advancedsearch.php?q={query_limpia}+AND+mediatype:audio&output=json&rows=1"
-        respuesta = requests.get(url_api, timeout=12)
+        url_api = f"https://archive.org/advancedsearch.php?q={query_limpia}+AND+mediatype:audio&output=json&rows=3"
+        respuesta = requests.get(url_api, timeout=8)
         
         if respuesta.status_code == 200:
             datos = respuesta.json()
             docs = datos.get('response', {}).get('docs', [])
-            if docs:
-                item_id = docs[0].get('identifier')
-                titulo = docs[0].get('title', 'Canción Completa')
+            
+            for doc in docs:
+                item_id = doc.get('identifier')
+                titulo = doc.get('title', 'Canción Completa')
                 
+                # Consultamos los archivos reales dentro del contenedor
                 url_files = f"https://archive.org/metadata/{item_id}"
-                res_files = requests.get(url_files, timeout=10).json()
+                res_files = requests.get(url_files, timeout=6).json()
                 
                 for f in res_files.get('files', []):
-                    if f.get('name', '').endswith('.mp3'):
+                    # Validamos que sea un archivo de audio MP3 real y público
+                    if f.get('name', '').lower().endswith('.mp3') and f.get('source', '') == 'original':
                         link_completo = f"https://archive.org/download/{item_id}/{f['name']}"
-                        return {"url": link_completo, "nombre_archivo": titulo}
-                        
+                        return {
+                            "url": link_completo,
+                            "nombre_archivo": titulo
+                        }
     except Exception as e:
-        print(f"Error en motor principal: {e}")
+        print(f"Intento 1 falló o tardó demasiado: {e}")
         
+    # INTENTO 2 (RESPALDO ULTRA ESTABLE): API libre de Jamendo
     try:
-        query_limpia = requests.utils.quote(query)
         url_respaldo = f"https://api.jamendo.com/v3.0/tracks/?client_id=56d30c95&format=json&limit=1&namesearch={query_limpia}"
-        res = requests.get(url_respaldo, timeout=10).json()
-        if res.get('results'):
+        res = requests.get(url_respaldo, timeout=8).json()
+        
+        if res.get('results') and len(res['results']) > 0:
             track = res['results'][0]
             if track.get('audio'):
                 return {
                     "url": track.get('audio'),
                     "nombre_archivo": f"{track.get('artist_name')} - {track.get('name')}"
                 }
-    except:
-        pass
+    except Exception as e:
+        print(f"Intento 2 de respaldo falló: {e}")
+        
     return None
 
-# COMANDO /START (MÁS AMABLE, INTUITIVO Y CON EJEMPLO CLARO)
+# COMANDO /START
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     usuario = update.effective_user.first_name
     mensaje_bienvenida = (
@@ -83,19 +92,17 @@ async def procesar_musica(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not busqueda_usuario or busqueda_usuario.startswith('/'):
         return
 
-    # CONTROL AMABLE: Si escribe menos de 3 letras, le recordamos poner artista y canción
     if len(busqueda_usuario) < 3:
         await update.message.reply_text(
             "⚠️ **¡Oops! Falta un poquito más de información.**\n\n"
-            "Por favor, escribe de forma más detallada el **grupo y la canción** para que pueda localizarla correctamente. 😉",
+            "Por favor, escribe de forma más detallada el **grupo y la canción** para buscarla correctamente. 😉",
             parse_mode="Markdown"
         )
         return
 
-    # Mensaje inicial estilizado
     mensaje_espera = await update.message.reply_text("🔄 **Buscando en los servidores...**\n⏳ *Por favor, dame unos segundos.*", parse_mode="Markdown")
 
-    # 1. VERIFICAR CACHÉ
+    # 1. VERIFICAR CACHÉ (TELEGRAM REENVÍA DE INMEDIATO)
     conn = sqlite3.connect('cache_musica.db')
     cursor = conn.cursor()
     cursor.execute("SELECT file_id FROM canciones WHERE busqueda = ?", (busqueda_usuario,))
@@ -109,7 +116,7 @@ async def procesar_musica(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await mensaje_espera.delete()
         return
 
-    # 2. ENCONTRAR EN LA API
+    # 2. ENCONTRAR EN LAS APIS
     datos_cancion = buscar_musica_api(busqueda_usuario)
     
     if not datos_cancion:
@@ -121,11 +128,11 @@ async def procesar_musica(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.close()
         return
 
-    # Guardamos los datos temporalmente en el contexto del usuario
+    # Guardamos los datos en el contexto de la sesión del usuario
     context.user_data['temp_track'] = datos_cancion
     context.user_data['temp_query'] = busqueda_usuario
 
-    # Crear panel de botones intuitivo
+    # Panel de botones interactivos
     botones = [
         [InlineKeyboardButton("🎵 Descargar MP3 Completo", callback_data="download_mp3")],
         [InlineKeyboardButton("❌ Cancelar", callback_data="cancelar_download")]
@@ -163,41 +170,51 @@ async def controlar_botones(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         archivo_temp = "audioflow_premium_track.mp3"
         try:
-            respuesta_audio = requests.get(datos_cancion['url'], timeout=35)
-            with open(archivo_temp, "wb") as f:
-                f.write(respuesta_audio.content)
-
-            await query.message.edit_text("🚀 **¡Proceso completado con éxito!**\n📤 *Enviando reproductor multimedia...*", parse_mode="Markdown")
+            # Petición de descarga real con un tiempo de espera más amplio (stream activo)
+            respuesta_audio = requests.get(datos_cancion['url'], timeout=45, stream=True)
             
-            with open(archivo_temp, "rb") as f:
-                mensaje_audio = await query.message.reply_audio(
-                    audio=f, 
-                    title=datos_cancion['nombre_archivo'],
-                    caption="⚡ **Descargado completo por @audioflow_music_bot**\n\n⚠️ *Content can be removed at the request of the copyright holder.*",
-                    parse_mode="Markdown"
-                )
+            if respuesta_audio.status_code == 200:
+                with open(archivo_temp, "wb") as f:
+                    for chunk in respuesta_audio.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
 
-            # GUARDAR EN CACHÉ
-            conn = sqlite3.connect('cache_musica.db')
-            cursor = conn.cursor()
-            try:
-                cursor.execute(
-                    "INSERT INTO canciones (busqueda, file_id, titulo) VALUES (?, ?, ?)",
-                    (busqueda_usuario, mensaje_audio.audio.file_id, datos_cancion['nombre_archivo'])
-                )
-                conn.commit()
-            except sqlite3.IntegrityError:
-                pass
-            conn.close()
+                await query.message.edit_text("🚀 **¡Proceso completado con éxito!**\n📤 *Enviando reproductor multimedia...*", parse_mode="Markdown")
+                
+                with open(archivo_temp, "rb") as f:
+                    mensaje_audio = await query.message.reply_audio(
+                        audio=f, 
+                        title=datos_cancion['nombre_archivo'],
+                        caption="⚡ **Descargado completo por @audioflow_music_bot**\n\n⚠️ *Content can be removed at the request of the copyright holder.*",
+                        parse_mode="Markdown"
+                    )
+
+                # GUARDAR EN CACHÉ PARA FUTUROS USUARIOS
+                conn = sqlite3.connect('cache_musica.db')
+                cursor = conn.cursor()
+                try:
+                    cursor.execute(
+                        "INSERT INTO canciones (busqueda, file_id, titulo) VALUES (?, ?, ?)",
+                        (busqueda_usuario, mensaje_audio.audio.file_id, datos_cancion['nombre_archivo'])
+                    )
+                    conn.commit()
+                except sqlite3.IntegrityError:
+                    pass
+                conn.close()
+                
+                # Eliminamos el mensaje de texto de estado una vez enviado el audio con éxito
+                await query.message.delete()
+            else:
+                raise Exception("El servidor de música respondió con un código de error.")
 
         except Exception as e:
-            await query.message.reply_text("⚠️ Tuvimos un pequeño inconveniente en la descarga. Por favor intenta de nuevo.")
-            print(f"Error interactivo: {e}")
+            await query.message.reply_text("⚠️ Tuvimos un inconveniente al procesar la descarga de este servidor. Por favor intenta con otra combinación de palabras o artista.")
+            print(f"Error interactivo crítico: {e}")
             
         finally:
+            # Garantizamos la limpieza en Railway siempre
             if os.path.exists(archivo_temp):
                 os.remove(archivo_temp)
-            await query.message.delete()
 
 # ARRANQUE
 def main():
@@ -208,7 +225,7 @@ def main():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, procesar_musica))
     application.add_handler(CallbackQueryHandler(controlar_botones))
 
-    print("AudioFlow Amigable corriendo...")
+    print("AudioFlow Reforzado corriendo...")
     application.run_polling()
 
 if __name__ == '__main__':
