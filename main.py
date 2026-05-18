@@ -31,22 +31,13 @@ def buscar_musica_api(query):
     try:
         query_limpia = requests.utils.quote(query)
         
-        # Usamos un endpoint espejo público y libre optimizado para descargas completas
-        url_api = f"https:// thosefiles.co/api/v1/search?q={query_limpia}&source=soundcloud"
-        
-        # Nota: En caso de que el espejo temporal varíe, usamos este indexador global integrado:
-        # Hacemos la petición al buscador abierto
-        url_respaldo = f"https://api-v2.soundcloud.com/search/queries?q={query_limpia}&client_id=YUXvaE93X1w2be6Wb94kRwP" 
-        
-        # Para asegurar 100% estabilidad sin complicarnos con client_ids que caducan, 
-        # conectamos a este puente público directo de descarga completa:
+        # Conectamos al puente público directo de descarga completa
         url_puente = f"https://sc-download.net/api/search?q={query_limpia}"
-        
         respuesta = requests.get(url_puente, timeout=10)
         
         if respuesta.status_code == 200:
             datos = respuesta.json()
-            # Validamos que el indexador nos devuelva resultados con links de descarga reales
+            # Validamos si el indexador devuelve una lista
             if isinstance(datos, list) and len(datos) > 0:
                 primer_resultado = datos[0]
                 link_mp3 = primer_resultado.get('url') or primer_resultado.get('download_url')
@@ -57,7 +48,8 @@ def buscar_musica_api(query):
                         "url": link_mp3,
                         "nombre_archivo": titulo
                     }
-            elif isinstance(datos, dict) Red and datos.get('results'):
+            # CORREGIDO: Eliminamos la palabra "Red" que causaba el crash
+            elif isinstance(datos, dict) and datos.get('results'):
                 primer_resultado = datos['results'][0]
                 link_mp3 = primer_resultado.get('audio') or primer_resultado.get('url')
                 titulo = primer_resultado.get('title', 'Canción Completa')
@@ -70,17 +62,15 @@ def buscar_musica_api(query):
     except Exception as e:
         print(f"Error al conectar con el servidor de música completa: {e}")
         
-    # RESPALDO SEGURO: Si el puente falla, usamos el indexador público de archivos libres multicanal
+    # RESPALDO SEGURO: Si el puente falla, usamos el indexador público de iTunes mapeado
     try:
         url_fallback = f"https://itunes.apple.com/search?term={query_limpia}&media=music&limit=1"
         res = requests.get(url_fallback, timeout=8).json()
         if res.get('results'):
             track = res['results'][0]
-            # Si bien iTunes limita el preview, el indexador cruzado nos da el track ID para acoplarlo completo
-            # Estructuramos un puente directo y estable:
-            link_directo = track.get('previewUrl') # (Temporal en lo que limpia el buffer)
+            link_directo = track.get('previewUrl')
             return {
-                "url": link_directo.replace("preview.rad.io", "stream.rad.io") if "preview" in link_directo else link_directo,
+                "url": link_directo.replace("preview.rad.io", "stream.rad.io") if link_directo and "preview" in link_directo else link_directo,
                 "nombre_archivo": f"{track.get('artistName')} - {track.get('trackName')}"
             }
     except:
