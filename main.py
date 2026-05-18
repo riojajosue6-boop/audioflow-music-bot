@@ -22,13 +22,35 @@ def iniciar_db():
     conn.commit()
     conn.close()
 
-# MOTOR DE AUDIO MEJORADO Y REFORZADO
-def buscar_musica_api(query):
+# MOTOR INTELIGENTE CON AUTOCORRECCIÓN Y CORRECCIÓN ORTOGRÁFICA
+def buscar_musica_inteligente(query):
+    """
+    Primero usa un motor de procesamiento de lenguaje (iTunes API) para corregir 
+    los errores ortográficos del usuario y encontrar el nombre real de la pista.
+    Luego, busca el archivo MP3 completo en los servidores libres.
+    """
     query_limpia = requests.utils.quote(query)
+    nombre_corregido = query # Respaldo por si acaso
     
-    # INTENTO 1: Servidor global de archivos abiertos (Archive.org)
+    # PASO 1: LA ADUANA ORTOGRÁFICA (Corregir el texto del usuario)
     try:
-        url_api = f"https://archive.org/advancedsearch.php?q={query_limpia}+AND+mediatype:audio&output=json&rows=3"
+        url_corrector = f"https://itunes.apple.com/search?term={query_limpia}&media=music&limit=1"
+        res_corrector = requests.get(url_corrector, timeout=6).json()
+        
+        if res_corrector.get('results') and len(res_corrector['results']) > 0:
+            track_limpio = res_corrector['results'][0]
+            # Extraemos el nombre real y limpio (Ej: "Rata Blanca - El Sueño de la Gitana")
+            nombre_corregido = f"{track_limpio.get('artistName')} - {track_limpio.get('trackName')}"
+            print(f"🔮 Texto corregido con éxito: '{query}' ➡️ '{nombre_corregido}'")
+    except Exception as e:
+        print(f"No se pudo autocorregir el texto, se usará el original: {e}")
+
+    # PASO 2: DESCARGA DEL MP3 COMPLETO UTILIZANDO EL NOMBRE YA CORREGIDO
+    query_busqueda = requests.utils.quote(nombre_corregido)
+    
+    # Intento A: Servidor global de archivos abiertos (Archive.org)
+    try:
+        url_api = f"https://archive.org/advancedsearch.php?q={query_busqueda}+AND+mediatype:audio&output=json&rows=3"
         respuesta = requests.get(url_api, timeout=8)
         
         if respuesta.status_code == 200:
@@ -37,14 +59,12 @@ def buscar_musica_api(query):
             
             for doc in docs:
                 item_id = doc.get('identifier')
-                titulo = doc.get('title', 'Canción Completa')
+                titulo = doc.get('title', nombre_corregido)
                 
-                # Consultamos los archivos reales dentro del contenedor
                 url_files = f"https://archive.org/metadata/{item_id}"
                 res_files = requests.get(url_files, timeout=6).json()
                 
                 for f in res_files.get('files', []):
-                    # Validamos que sea un archivo de audio MP3 real y público
                     if f.get('name', '').lower().endswith('.mp3') and f.get('source', '') == 'original':
                         link_completo = f"https://archive.org/download/{item_id}/{f['name']}"
                         return {
@@ -52,11 +72,11 @@ def buscar_musica_api(query):
                             "nombre_archivo": titulo
                         }
     except Exception as e:
-        print(f"Intento 1 falló o tardó demasiado: {e}")
+        print(f"Fallo en Archive con texto corregido: {e}")
         
-    # INTENTO 2 (RESPALDO ULTRA ESTABLE): API libre de Jamendo
+    # Intento B (Respaldo estable): API libre de Jamendo
     try:
-        url_respaldo = f"https://api.jamendo.com/v3.0/tracks/?client_id=56d30c95&format=json&limit=1&namesearch={query_limpia}"
+        url_respaldo = f"https://api.jamendo.com/v3.0/tracks/?client_id=56d30c95&format=json&limit=1&namesearch={query_busqueda}"
         res = requests.get(url_respaldo, timeout=8).json()
         
         if res.get('results') and len(res['results']) > 0:
@@ -67,7 +87,7 @@ def buscar_musica_api(query):
                     "nombre_archivo": f"{track.get('artist_name')} - {track.get('name')}"
                 }
     except Exception as e:
-        print(f"Intento 2 de respaldo falló: {e}")
+        print(f"Fallo en Jamendo con texto corregido: {e}")
         
     return None
 
@@ -76,12 +96,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     usuario = update.effective_user.first_name
     mensaje_bienvenida = (
         f"👋 **¡Hola, {usuario}! Qué alegría tenerte en AudioFlow** 🌊\n\n"
-        "Te ayudaré a encontrar y descargar tus canciones favoritas completas y al instante. 🎧\n\n"
-        "📌 **Por favor, escríbeme el nombre de la banda/grupo y la canción que quieres escuchar.**\n\n"
+        "¡He sido actualizado con un cerebro de **Autocorrección Inteligente**! 🧠\n"
+        "Ahora, aunque te equivoques al escribir una letra o palabra, ¡entenderé qué canción buscas! 🎧\n\n"
+        "📌 **Por favor, escríbeme el grupo y la canción que quieres escuchar.**\n\n"
         "✍️ **Por ejemplo:**\n"
         "`Luis Miguel - Ahora te puedes marchar`\n"
-        "`Guns N' Roses - Sweet Child O' Mine`\n\n"
-        "¡Dime! ¿Qué temazo vamos a escuchar hoy? 🎶"
+        "`Rata Blanca - Sueños de gitana`\n\n"
+        "¡Dime! ¿Qué temazo vamos a buscar hoy? 🎶"
     )
     await update.message.reply_text(mensaje_bienvenida, parse_mode="Markdown")
 
@@ -100,9 +121,9 @@ async def procesar_musica(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    mensaje_espera = await update.message.reply_text("🔄 **Buscando en los servidores...**\n⏳ *Por favor, dame unos segundos.*", parse_mode="Markdown")
+    mensaje_espera = await update.message.reply_text("🔄 **Analizando y buscando en los servidores...**\n⏳ *Por favor, dame unos segundos.*", parse_mode="Markdown")
 
-    # 1. VERIFICAR CACHÉ (TELEGRAM REENVÍA DE INMEDIATO)
+    # 1. VERIFICAR CACHÉ
     conn = sqlite3.connect('cache_musica.db')
     cursor = conn.cursor()
     cursor.execute("SELECT file_id FROM canciones WHERE busqueda = ?", (busqueda_usuario,))
@@ -116,13 +137,13 @@ async def procesar_musica(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await mensaje_espera.delete()
         return
 
-    # 2. ENCONTRAR EN LAS APIS
-    datos_cancion = buscar_musica_api(busqueda_usuario)
+    # 2. PROCESAR CON EL NUEVO MOTOR INTELIGENTE (CON CORRECTOR)
+    datos_cancion = buscar_musica_inteligente(busqueda_usuario)
     
     if not datos_cancion:
         await mensaje_espera.edit_text(
             "❌ **No logré encontrar esa pista.**\n\n"
-            "💡 *Te sugiero probar escribiendo el nombre del grupo seguido del título de la canción. ¡Así es infalible!*", 
+            "💡 *Te sugiero verificar el nombre del grupo o intentar escribiendo otra palabra clave.*", 
             parse_mode="Markdown"
         )
         conn.close()
@@ -140,8 +161,8 @@ async def procesar_musica(update: Update, context: ContextTypes.DEFAULT_TYPE):
     markup = InlineKeyboardMarkup(botones)
 
     await mensaje_espera.edit_text(
-        f"🎯 **¡Resultado Encontrado!**\n\n"
-        f"🎵 **Título:** {datos_cancion['nombre_archivo']}\n"
+        f"🎯 **¡Resultado Encontrado e Inteligenciado!**\n\n"
+        f"🎵 **Título Real:** {datos_cancion['nombre_archivo']}\n"
         f"💿 **Calidad:** Alta Calidad / Estéreo\n\n"
         f"👇 *Haz clic abajo para confirmar tu descarga:*",
         parse_mode="Markdown",
@@ -170,7 +191,6 @@ async def controlar_botones(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         archivo_temp = "audioflow_premium_track.mp3"
         try:
-            # Petición de descarga real con un tiempo de espera más amplio (stream activo)
             respuesta_audio = requests.get(datos_cancion['url'], timeout=45, stream=True)
             
             if respuesta_audio.status_code == 200:
@@ -189,7 +209,7 @@ async def controlar_botones(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         parse_mode="Markdown"
                     )
 
-                # GUARDAR EN CACHÉ PARA FUTUROS USUARIOS
+                # GUARDAR EN CACHÉ PARA EL FUTURO (Usa lo que escribió el usuario para recordarlo)
                 conn = sqlite3.connect('cache_musica.db')
                 cursor = conn.cursor()
                 try:
@@ -202,17 +222,15 @@ async def controlar_botones(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     pass
                 conn.close()
                 
-                # Eliminamos el mensaje de texto de estado una vez enviado el audio con éxito
                 await query.message.delete()
             else:
-                raise Exception("El servidor de música respondió con un código de error.")
+                raise Exception("El servidor de música no respondió correctamente.")
 
         except Exception as e:
-            await query.message.reply_text("⚠️ Tuvimos un inconveniente al procesar la descarga de este servidor. Por favor intenta con otra combinación de palabras o artista.")
+            await query.message.reply_text("⚠️ Tuvimos un inconveniente al procesar la descarga. Por favor intenta de nuevo.")
             print(f"Error interactivo crítico: {e}")
             
         finally:
-            # Garantizamos la limpieza en Railway siempre
             if os.path.exists(archivo_temp):
                 os.remove(archivo_temp)
 
@@ -225,7 +243,7 @@ def main():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, procesar_musica))
     application.add_handler(CallbackQueryHandler(controlar_botones))
 
-    print("AudioFlow Reforzado corriendo...")
+    print("AudioFlow Inteligente corriendo...")
     application.run_polling()
 
 if __name__ == '__main__':
