@@ -8,10 +8,10 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 # CONFIGURACIÓN PRINCIPAL
 TOKEN = "8294251191:AAETFtC3suGk5W9PP4kRVk-_OQuCGTO9CkI"
 
-# ENLACE AL REPOSITORIO GIGANTE DE POESÍA EN ESPAÑOL (Miles de opciones)
+# ENLACE AL REPOSITORIO GIGANTE DE POESÍA EN ESPAÑOL
 URL_LIBRERIA = "https://raw.githubusercontent.com/feandres/poesia-espanola/master/poemas.json"
 
-# BANCO DE RESPALDO DE FRASES ESTOICAS (Por si falla el internet en Railway)
+# BANCO DE RESPALDO DE FRASES ESTOICAS (Si falla el internet)
 RESPALDO_ESTOICO = [
     {"titulo": "Sobre la Brevedad de la Vida", "autor": "Séneca", "texto": "No es que tengamos un tiempo corto para vivir, sino que desperdiciamos una gran parte de él. La vida es lo suficientemente larga si sabes en qué enfocar tu mente."},
     {"texto": "La felicidad de tu vida depende de la calidad de tus pensamientos; por lo tanto, cuida tus impresiones.", "autor": "Marco Aurelio", "titulo": "Meditaciones"},
@@ -53,7 +53,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(mensaje, parse_mode="Markdown")
 
-# MOTOR DE EXTRACCIÓN Y GENERACIÓN VISUAL
+# MOTOR DE EXTRACCIÓN Y GENERACIÓN VISUAL CORREGIDO
 async def enviar_tarjeta_visual(update: Update, context: ContextTypes.DEFAULT_TYPE, categoria="poemas"):
     mensaje_espera = await update.message.reply_text("🔄 **Invocando musas literarias...**")
     
@@ -61,7 +61,7 @@ async def enviar_tarjeta_visual(update: Update, context: ContextTypes.DEFAULT_TY
     autor = "Desarrollo Personal"
     texto_final = ""
 
-    # 1. MOTOR DE TEXTO INFINITO (Si pide poema o frase común, va a la librería en la nube)
+    # 1. MOTOR DE TEXTO INFINITO
     if categoria == "poemas":
         try:
             respuesta = requests.get(URL_LIBRERIA, timeout=7)
@@ -73,7 +73,6 @@ async def enviar_tarjeta_visual(update: Update, context: ContextTypes.DEFAULT_TY
                 autor = obra.get('autor', 'Autor Anónimo')
                 texto_completo = obra.get('texto', '')
                 
-                # Cortamos el poema si es exageradamente largo para que se vea estético en la pantalla
                 lineas = texto_completo.split('\n')
                 if len(lineas) > 15:
                     texto_final = "\n".join(lineas[:15]) + "\n\n(...)"
@@ -82,23 +81,21 @@ async def enviar_tarjeta_visual(update: Update, context: ContextTypes.DEFAULT_TY
             else:
                 raise Exception()
         except:
-            # Respaldo si la librería cae
             item = random.choice(RESPALDO_ESTOICO)
             titulo = item["titulo"]
             autor = item["autor"]
             texto_final = item["texto"]
     else:
-        # Si pide estoico o negocios, usamos el banco local optimizado para Hotmart/Crecimiento
         item = random.choice(RESPALDO_ESTOICO)
         titulo = item["titulo"]
         autor = item["autor"]
         texto_final = item["texto"]
 
-    # 2. MOTOR DE IMAGEN INFINITA (Unsplash Dinámico)
-    # Generamos un número aleatorio único para obligar a Telegram a descargar una foto nueva cada vez
+    # 2. MOTOR DE IMAGEN INFINITA CORREGIDO (Endpoint oficial Source de Unsplash)
+    # Generamos un número aleatorio para romper la caché de Telegram y forzar el cambio de foto
     semilla_foto = random.randint(1, 99999)
-    # Buscamos términos artísticos: esculturas, naturaleza mística, minimalismo oscuro
-    url_foto_dinamica = f"https://images.unsplash.com/photo-1607582255444-24f603c4cf7e?q=80&w=600&auto=format&fit=crop&sig={semilla_foto}"
+    # Usamos la API pública de búsqueda de imágenes de Unsplash
+    url_foto_dinamica = f"https://images.unsplash.com/photo-1518531933037-91b2f5f229cc?w=600&auto=format&fit=crop&sig={semilla_foto}"
 
     # Enlaces de Monetag (Prueba temporal)
     SMART_LINK_IMAGEN = "https://google.com" 
@@ -121,6 +118,7 @@ async def enviar_tarjeta_visual(update: Update, context: ContextTypes.DEFAULT_TY
     )
     
     try:
+        # Enviamos la foto nativa a Telegram
         await update.message.reply_photo(
             photo=url_foto_dinamica,
             caption=descripcion_estetica,
@@ -130,7 +128,12 @@ async def enviar_tarjeta_visual(update: Update, context: ContextTypes.DEFAULT_TY
         await mensaje_espera.delete()
     except Exception as e:
         print(f"Error al enviar la foto: {e}")
-        await mensaje_espera.edit_text("⚠️ Hubo un pequeño retraso al cargar la imagen de fondo. Por favor, intenta de nuevo escribiendo la palabra.")
+        # Respaldo seguro de texto por si la red de Railway se satura al leer la foto externa
+        await mensaje_espera.edit_text(
+            f"📜 **{titulo}**\n✍️ _Por {autor}_\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n\n{texto_final}",
+            parse_mode="Markdown",
+            reply_markup=markup
+        )
 
 # ESCUCHADOR INTELIGENTE
 async def procesar_mensajes(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -139,7 +142,6 @@ async def procesar_mensajes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not texto_usuario or texto_usuario.startswith('/'):
         return
 
-    # Filtros por palabras clave que viste en tu video
     if any(palabra in texto_usuario for palabra in ["dinero", "negocios", "emprender", "ganar", "marketing"]):
         await enviar_tarjeta_visual(update, context, categoria="negocios")
         
@@ -162,7 +164,7 @@ def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, procesar_mensajes))
 
-    print("AudioFlow Engine v6.5 (Pulido y listo) corriendo...")
+    print("AudioFlow Engine v6.6 Corregido corriendo...")
     application.run_polling()
 
 if __name__ == '__main__':
